@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Device Check</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Device Check">
+<meta name="theme-color" content="#14213D">
+<style>
+:root{--bg:#F6F5F0;--card:#FFFFFF;--ink:#14213D;--muted:#4A5568;--line:#DAD7CC;--ok:#1D6B4F;--warn:#A3480E;--bad:#B42318;--accent:#2F5DA8}
+@media (prefers-color-scheme:dark){:root{--bg:#10192E;--card:#18233D;--ink:#EEF0F4;--muted:#AEB7C7;--line:#2A3757;--ok:#5CC29A;--warn:#F2A65A;--bad:#F08A80;--accent:#8FB3F0}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font-size:1.5rem;margin:8px 0 0}
+h2{font-size:1.1rem;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:none}
+.k{font-weight:600}
+.v{text-align:right;color:var(--muted)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+button{font:inherit;font-weight:600;border:none;border-radius:10px;padding:12px 16px;background:var(--accent);color:#fff;min-height:44px}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+input,select{font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-height:44px;width:100%}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+video{width:100%;border-radius:10px;background:#000;max-height:320px}
+.note{font-size:.9rem;color:var(--muted)}
+ol{padding-left:20px;margin:8px 0}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;opacity:0;transition:opacity .2s}
+</style>
+</head>
+<body>
+<main>
+<h1>Device Check</h1>
+<p class="note">Tests what Safari on this iPhone or iPad can do for a browser-based testing app. Nothing leaves this device.</p>
+
+<div class="card" id="steps">
+<h2>How to run it</h2>
+<ol>
+<li>Open this page in <b>Safari</b>. Tap <b>Run checks</b>, then <b>Test camera</b>, and save one reading below.</li>
+<li>Tap Share → <b>Add to Home Screen</b>. Open <b>Device Check</b> from the new icon.</li>
+<li>In the installed app tap <b>Keep data</b>, then <b>Run checks</b> again.</li>
+<li>Turn on <b>Airplane Mode</b>. Swipe the app closed, reopen it from the icon, and save another reading.</li>
+<li>Turn Airplane Mode off, reopen, tap <b>Run checks</b>, then <b>Copy results</b>.</li>
+</ol>
+</div>
+
+<div class="card">
+<h2>Results</h2>
+<div id="results"></div>
+<div class="btns">
+<button id="run">Run checks</button>
+<button class="secondary" id="persist">Keep data</button>
+<button class="secondary" id="copy">Copy results</button>
+</div>
+</div>
+
+<div class="card">
+<h2>Camera</h2>
+<video id="video" playsinline muted></video>
+<div class="btns">
+<button id="cam">Test camera</button>
+<button class="secondary" id="rec">Record 3-second clip</button>
+</div>
+<p class="note" id="camnote">Uses the rear camera. The clip is stored on this device only, to test saving video offline.</p>
+</div>
+
+<div class="card">
+<h2>Grip reading (typed in)</h2>
+<div class="grid">
+<select id="hand"><option>Right</option><option>Left</option></select>
+<input id="lb" type="number" inputmode="decimal" placeholder="Pounds">
+</div>
+<div class="btns"><button id="save">Save reading</button></div>
+<div id="readings" class="note" style="margin-top:8px"></div>
+</div>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const log = {};
+let firstOpenLog = JSON.parse(localStorage.getItem('dc-log') || '[]');
+const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+firstOpenLog.push({at:new Date().toISOString(), standalone, online:navigator.onLine});
+firstOpenLog = firstOpenLog.slice(-20);
+try{localStorage.setItem('dc-log', JSON.stringify(firstOpenLog));}catch(e){}
+
+function toast(t){const el=$('#toast');el.textContent=t;el.style.opacity=1;setTimeout(()=>el.style.opacity=0,1600)}
+function set(key, cls, val){log[key]={cls,val};render()}
+function render(){
+  $('#results').innerHTML = Object.entries(log).map(([k,{cls,val}])=>`<div class="row"><span class="k">${k}</span><span class="v ${cls}">${val}</span></div>`).join('');
+}
+
+// IndexedDB
+let db;
+function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open('device-check',1);r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('readings',{keyPath:'id',autoIncrement:true});d.createObjectStore('clips',{keyPath:'id',autoIncrement:true})};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function all(store){return new Promise((res,rej)=>{const t=db.transaction(store).objectStore(store).getAll();t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error)})}
+function put(store,v){return new Promise((res,rej)=>{const t=db.transaction(store,'readwrite').objectStore(store).add(v);t.onsuccess=()=>res();t.onerror=()=>rej(t.error)})}
+
+async function showReadings(){
+  const rs = await all('readings');
+  $('#readings').innerHTML = rs.length ? rs.slice(-8).reverse().map(r=>`${new Date(r.at).toLocaleString()} · ${r.hand} ${r.lb} lb · ${r.online?'online':'<b>saved offline</b>'}${r.standalone?' · installed app':''}`).join('<br>') : 'No readings yet.';
+  return rs;
+}
+
+async function runChecks(){
+  set('Device', '', `${/iPad/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)?'iPad':/iPhone/.test(navigator.userAgent)?'iPhone':'Other'} · ${screen.width}×${screen.height}`);
+  const iosv = (navigator.userAgent.match(/OS (\d+)_(\d+)/)||[]).slice(1).join('.');
+  const inApp = /CriOS|FxiOS|EdgiOS|Claude|GSA|FBAN|Instagram/.test(navigator.userAgent);
+  set('Browser', inApp?'warn':'ok', `${inApp?'In-app browser (open in Safari)':'Safari'}${iosv?' · iOS '+iosv:''}`);
+  set('Installed to Home Screen', standalone?'ok':'warn', standalone?'Yes, running as an installed app':'No, running in a browser tab');
+  set('Bluetooth (dynamometer)', 'bluetooth' in navigator?'ok':'bad', 'bluetooth' in navigator?'Available':'Not available: readings are typed in');
+  set('Network', navigator.onLine?'':'warn', navigator.onLine?'Online':'Offline (Airplane Mode)');
+  // service worker / offline
+  if('serviceWorker' in navigator){
+    const reg = await navigator.serviceWorker.getRegistration();
+    const ctrl = !!navigator.serviceWorker.controller;
+    set('Works offline', ctrl?'ok':'warn', ctrl?'Yes, page is cached on the device':(reg?'Cached; reload once to activate':'Setting up, reload once'));
+  } else set('Works offline','bad','No service worker support');
+  set('Background upload', 'SyncManager' in window?'ok':'warn', 'SyncManager' in window?'Supported':'Not supported: uploads run only while the app is open');
+  // storage
+  try{
+    const rs = await showReadings(); const clips = await all('clips');
+    const off = rs.filter(r=>!r.online).length;
+    set('On-device database', 'ok', `Works · ${rs.length} readings (${off} saved offline) · ${clips.length} clips`);
+  }catch(e){set('On-device database','bad','Failed: '+e.message)}
+  if(navigator.storage&&navigator.storage.estimate){
+    const e = await navigator.storage.estimate();
+    set('Storage space', '', `Using ${(e.usage/1048576).toFixed(1)} MB of about ${(e.quota/1048576/1024).toFixed(1)} GB allowed`);
+  }
+  if(navigator.storage&&navigator.storage.persisted){
+    const p = await navigator.storage.persisted();
+    set('Data kept long-term', p?'ok':'warn', p?'Yes, protected from automatic clearing':'Not yet: tap Keep data (works best in the installed app)');
+  }
+  const opens = firstOpenLog.filter(o=>o.standalone);
+  const offOpens = opens.filter(o=>!o.online).length;
+  set('Opened while offline', offOpens?'ok':'warn', offOpens?`Yes, ${offOpens} time(s) from the Home Screen icon`:'Not yet tested');
+  if(log['Camera']===undefined) set('Camera','warn','Not tested yet: tap Test camera');
+}
+
+$('#run').onclick = runChecks;
+$('#persist').onclick = async()=>{
+  if(!(navigator.storage&&navigator.storage.persist)){toast('Not supported');return}
+  const ok = await navigator.storage.persist(); toast(ok?'Data will be kept':'Safari declined; try from the installed app'); runChecks();
+};
+$('#copy').onclick = async()=>{
+  const text = 'Device Check results\n' + Object.entries(log).map(([k,{val}])=>`${k}: ${val}`).join('\n') + `\nOpens logged: ${firstOpenLog.length} (${firstOpenLog.filter(o=>o.standalone).length} installed, ${firstOpenLog.filter(o=>!o.online).length} offline)`;
+  try{await navigator.clipboard.writeText(text);toast('Copied')}catch(e){prompt('Copy these results:',text)}
+};
+$('#save').onclick = async()=>{
+  const lb = parseFloat($('#lb').value); if(!lb){toast('Enter pounds');return}
+  await put('readings',{at:Date.now(),hand:$('#hand').value,lb,online:navigator.onLine,standalone});
+  $('#lb').value=''; toast(navigator.onLine?'Saved':'Saved offline'); runChecks();
+};
+
+let stream;
+$('#cam').onclick = async()=>{
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){set('Camera','bad','Not available here');return}
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
+    const v=$('#video'); v.srcObject=stream; await v.play();
+    const s = stream.getVideoTracks()[0].getSettings();
+    set('Camera','ok',`Works · ${s.width}×${s.height}${s.frameRate?' @ '+Math.round(s.frameRate)+' fps':''}`);
+  }catch(e){set('Camera','bad','Blocked or failed: '+e.name)}
+};
+$('#rec').onclick = async()=>{
+  if(!stream){await $('#cam').onclick(); if(!stream) return}
+  if(typeof MediaRecorder==='undefined'){set('Video recording','bad','Not supported');return}
+  const mime = ['video/mp4','video/webm'].find(m=>MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(m))||'';
+  const rec = new MediaRecorder(stream, mime?{mimeType:mime}:undefined); const chunks=[];
+  rec.ondataavailable=e=>chunks.push(e.data);
+  rec.onstop=async()=>{
+    const blob=new Blob(chunks,{type:rec.mimeType});
+    try{await put('clips',{at:Date.now(),size:blob.size,type:rec.mimeType,blob,online:navigator.onLine});
+      set('Video recording','ok',`Works · 3 s clip ${(blob.size/1048576).toFixed(1)} MB (${rec.mimeType||'unknown'}) saved on device${navigator.onLine?'':' while offline'}`);}
+    catch(e){set('Video recording','bad','Recorded but could not save: '+e.message)}
+  };
+  rec.start(); toast('Recording 3 s…'); setTimeout(()=>rec.stop(),3000);
+};
+
+(async()=>{
+  try{db=await openDB()}catch(e){}
+  if('serviceWorker' in navigator){try{await navigator.serviceWorker.register('sw.js')}catch(e){}}
+  runChecks();
+})();
+</script>
+</body>
+</html>
