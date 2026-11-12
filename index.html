@@ -36,7 +36,7 @@ ol{padding-left:20px;margin:8px 0}
 </head>
 <body>
 <main>
-<h1>Device Check</h1>
+<h1>Device Check <span class="note">v2</span></h1>
 <p class="note">Tests what Safari on this iPhone or iPad can do for a browser-based testing app. Nothing leaves this device.</p>
 
 <div class="card" id="steps">
@@ -83,6 +83,8 @@ ol{padding-left:20px;margin:8px 0}
 <div id="toast"></div>
 
 <script>
+window.addEventListener('error',e=>{const r=document.getElementById('readings');if(r)r.textContent='Error: '+e.message});
+window.addEventListener('unhandledrejection',e=>{const r=document.getElementById('readings');if(r)r.textContent='Error: '+(e.reason&&(e.reason.name+' '+e.reason.message))});
 const $ = s => document.querySelector(s);
 const log = {};
 let firstOpenLog = JSON.parse(localStorage.getItem('dc-log') || '[]');
@@ -100,8 +102,9 @@ function render(){
 // IndexedDB
 let db;
 function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open('device-check',1);r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('readings',{keyPath:'id',autoIncrement:true});d.createObjectStore('clips',{keyPath:'id',autoIncrement:true})};r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
-function all(store){return new Promise((res,rej)=>{const t=db.transaction(store).objectStore(store).getAll();t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error)})}
-function put(store,v){return new Promise((res,rej)=>{const t=db.transaction(store,'readwrite').objectStore(store).add(v);t.onsuccess=()=>res();t.onerror=()=>rej(t.error)})}
+function all(store){return ensureDB().then(()=>new Promise((res,rej)=>{const t=db.transaction(store).objectStore(store).getAll();t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error)}))}
+async function ensureDB(){if(!db){db=await openDB()}return db}
+function put(store,v){return ensureDB().then(()=>new Promise((res,rej)=>{const t=db.transaction(store,'readwrite').objectStore(store).add(v);t.onsuccess=()=>res();t.onerror=()=>rej(t.error)}))}
 
 async function showReadings(){
   const rs = await all('readings');
@@ -154,9 +157,14 @@ $('#copy').onclick = async()=>{
   try{await navigator.clipboard.writeText(text);toast('Copied')}catch(e){prompt('Copy these results:',text)}
 };
 $('#save').onclick = async()=>{
-  const lb = parseFloat($('#lb').value); if(!lb){toast('Enter pounds');return}
-  await put('readings',{at:Date.now(),hand:$('#hand').value,lb,online:navigator.onLine,standalone});
-  $('#lb').value=''; toast(navigator.onLine?'Saved':'Saved offline'); runChecks();
+  $('#lb').blur();
+  const lb = parseFloat(String($('#lb').value).replace(',','.')); if(!lb){toast('Enter pounds first');return}
+  try{
+    await put('readings',{at:Date.now(),hand:$('#hand').value,lb,online:navigator.onLine,standalone});
+    $('#lb').value=''; toast(navigator.onLine?'Saved':'Saved offline');
+  }catch(e){ set('On-device database','bad','Save failed: '+(e&&(e.name+' '+e.message))); toast('Save failed'); }
+  try{ await showReadings(); }catch(e){ $('#readings').textContent='Could not read saved readings: '+(e&&(e.name+' '+e.message)); }
+  runChecks();
 };
 
 let stream;
